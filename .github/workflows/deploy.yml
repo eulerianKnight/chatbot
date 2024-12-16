@@ -1,0 +1,54 @@
+name: Deploy to Amazon ECS
+
+on:
+    pull_request:
+      types: [closed]
+      branches:
+        - release-1.0.0
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Step 1: Checkout the repository
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    # Step 2: Log in to Amazon ECR
+    - name: Log in to Amazon ECR
+      id: ecr-login
+      uses: aws-actions/amazon-ecr-login@v1
+
+    # Step 3: Build and push the Docker image
+    - name: Build, tag, and push Docker image
+      env:
+        ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+        ECR_REPOSITORY: tranquillaai/repo01
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+    # Step 4: Deploy to Amazon ECS
+    - name: Deploy to Amazon ECS
+      env:
+        CLUSTER_NAME: fastapi-cluster
+        SERVICE_NAME: fastapi-service
+        TASK_FAMILY: fastapi-task
+        CONTAINER_NAME: fastapi-container
+        ECR_IMAGE: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/fastapi-app:${{ github.sha }}
+      run: |
+        aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME \
+          --force-new-deployment --region ${{ secrets.AWS_REGION }} \
+          --task-definition $(aws ecs register-task-definition \
+          --family $TASK_FAMILY \
+          --container-definitions '[{
+            "name":"'$CONTAINER_NAME'",
+            "image":"'$ECR_IMAGE'",
+            "cpu":256,
+            "memory":512,
+            "essential":true,
+            "portMappings":[{"containerPort":8000,"hostPort":8000}]
+          }]' \
+          --region ${{ secrets.AWS_REGION }} --query 'taskDefinition.taskDefinitionArn' --output text)
